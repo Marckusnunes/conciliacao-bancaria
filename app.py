@@ -113,19 +113,21 @@ if st.button("Realizar Conciliação", type="primary", use_container_width=True)
                     df_extratos['chave_conta'] = df_extratos['conta'].apply(criar_chave_conta)
                     df_movimentacao['chave_conta'] = df_movimentacao[NOME_DA_COLUNA_CONTA_NO_CSV].apply(criar_chave_conta)
                     df_movimentacao[NOME_COLUNA_VALOR_CSV] = df_movimentacao[NOME_COLUNA_VALOR_CSV].apply(limpar_valor)
-                    df_extratos['data_movimento'] = pd.to_datetime(df_extratos['data'], dayfirst=True)
-                    df_movimentacao['data_movimento'] = pd.to_datetime(df_movimentacao[NOME_COLUNA_DATA_CSV], dayfirst=True)
+                    
+                    # <<< MELHORIA FINAL: Normalizar datas para remover o tempo >>>
+                    df_extratos['data_movimento'] = pd.to_datetime(df_extratos['data'], dayfirst=True).dt.normalize()
+                    df_movimentacao['data_movimento'] = pd.to_datetime(df_movimentacao[NOME_COLUNA_DATA_CSV], dayfirst=True).dt.normalize()
+                    
                     df_extratos['valor_abs'] = df_extratos['valor'].abs()
                     df_movimentacao['valor_abs'] = df_movimentacao[NOME_COLUNA_VALOR_CSV].abs()
-
-                    # <<< MELHORIA: Renomear colunas ANTES do merge para mais clareza >>>
+                    
                     df_extratos_std = df_extratos[['data_movimento', 'valor_abs', 'chave_conta', 'historico', 'valor']].copy()
                     df_extratos_std.rename(columns={'valor': 'valor_extrato'}, inplace=True)
                     
                     df_movimentacao_std = df_movimentacao[['data_movimento', 'valor_abs', 'chave_conta', NOME_COLUNA_DOCUMENTO_CSV, NOME_COLUNA_VALOR_CSV]].copy()
                     df_movimentacao_std.rename(columns={NOME_COLUNA_VALOR_CSV: 'valor_mov', NOME_COLUNA_DOCUMENTO_CSV: 'Documento'}, inplace=True)
 
-                    # Realizar o merge usando as novas colunas padronizadas
+                    # Realizar o merge
                     df_merged = pd.merge(
                         df_extratos_std,
                         df_movimentacao_std,
