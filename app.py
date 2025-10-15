@@ -82,7 +82,6 @@ st.title(" ferramenta de Pré-Conciliação Bancária")
 
 st.info("Carregue os extratos de investimentos (PDF) e a planilha de movimentação (CSV) para preparar os dados para a conciliação.")
 
-# Colunas para organizar a interface
 col1, col2 = st.columns(2)
 
 with col1:
@@ -101,7 +100,6 @@ with col2:
     )
 
 if st.button("Processar e Preparar Dados", type="primary"):
-    # Processar Extratos PDF
     if not extratos_pdf:
         st.warning("Por favor, carregue pelo menos um extrato PDF.")
     else:
@@ -118,14 +116,17 @@ if st.button("Processar e Preparar Dados", type="primary"):
             df_extratos = pd.DataFrame(dados_extratos)
             st.session_state['df_extratos'] = df_extratos
 
-    # Processar Planilha CSV
     if not movimentacao_csv:
         st.warning("Por favor, carregue o ficheiro CSV de movimentação.")
     else:
         with st.spinner("A carregar planilha de movimentação..."):
-            # O ficheiro CSV usa ';' como separador
-            df_movimentacao = pd.read_csv(movimentacao_csv, sep=';', decimal=',')
-            st.session_state['df_movimentacao'] = df_movimentacao
+            try:
+                # <<< ALTERAÇÃO AQUI: Adicionado encoding='latin1' >>>
+                df_movimentacao = pd.read_csv(movimentacao_csv, sep=';', decimal=',', encoding='latin1')
+                st.session_state['df_movimentacao'] = df_movimentacao
+            except Exception as e:
+                st.error(f"Erro ao ler o ficheiro CSV: {e}")
+                st.info("Tente abrir o CSV no seu computador, guardá-lo como 'CSV UTF-8' e carregá-lo novamente.")
 
 # --- Secção de Resultados ---
 
@@ -133,7 +134,6 @@ if 'df_extratos' in st.session_state and 'df_movimentacao' in st.session_state:
     st.success("Dados processados e prontos para a conciliação!")
     st.header("Dados Reservados para Conciliação")
 
-    # Mostrar dados dos extratos
     st.subheader("Resultado Extraído dos Extratos PDF")
     st.dataframe(st.session_state.df_extratos)
     st.download_button(
@@ -145,7 +145,6 @@ if 'df_extratos' in st.session_state and 'df_movimentacao' in st.session_state:
 
     st.divider()
 
-    # Mostrar dados da movimentação
     st.subheader("Dados da Planilha de Movimentação")
     st.dataframe(st.session_state.df_movimentacao)
     st.download_button(
