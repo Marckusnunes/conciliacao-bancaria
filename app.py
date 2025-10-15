@@ -99,14 +99,13 @@ if st.button("Realizar Conciliação", type="primary", use_container_width=True)
     if extratos_pdf and movimentacao_csv:
         with st.spinner("A processar..."):
             df_extratos = processar_extratos_pdf(extratos_pdf)
-            # A função limpar_valor foi melhorada para lidar com valores que já são numéricos
-            df_movimentacao = pd.read_csv(movimentacao_csv, sep=';')
+            # A linha abaixo foi corrigida para incluir o encoding
+            df_movimentacao = pd.read_csv(movimentacao_csv, sep=';', encoding='latin1')
             df_movimentacao.columns = df_movimentacao.columns.str.strip()
-
 
             if not df_extratos.empty and not df_movimentacao.empty:
                 try:
-                    # --- BLOCO DE CONFIGURAÇÃO (CORRIGIDO) ---
+                    # --- BLOCO DE CONFIGURAÇÃO ---
                     NOME_DA_COLUNA_CONTA_NO_CSV = 'Domicílio bancário'
                     NOME_COLUNA_DATA_CSV = 'Data Emissão'
                     NOME_COLUNA_VALOR_CSV = 'Movimentação'
@@ -115,7 +114,6 @@ if st.button("Realizar Conciliação", type="primary", use_container_width=True)
                     df_extratos['chave_conta'] = df_extratos['conta'].apply(criar_chave_conta)
                     df_movimentacao['chave_conta'] = df_movimentacao[NOME_DA_COLUNA_CONTA_NO_CSV].apply(criar_chave_conta)
                     
-                    # Aplica a função de limpeza na coluna de valor do CSV
                     df_movimentacao[NOME_COLUNA_VALOR_CSV] = df_movimentacao[NOME_COLUNA_VALOR_CSV].apply(limpar_valor)
 
                     df_extratos_std = df_extratos[['data', 'valor', 'chave_conta', 'historico']].copy()
