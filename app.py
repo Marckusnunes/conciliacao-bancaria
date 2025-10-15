@@ -7,7 +7,7 @@ from io import BytesIO
 st.set_page_config(layout="wide")
 st.title(" ferramenta de Conciliação Bancária")
 
-# --- FUNÇÕES AUXILIARES E DE EXTRAÇÃO (sem alterações) ---
+# --- FUNÇÕES AUXILIARES E DE EXTRAÇÃO ---
 
 def criar_chave_conta(numero_conta):
     try:
@@ -45,11 +45,13 @@ def extrair_dados_investimentos(pdf_page):
     transacoes = []
     tabelas = pdf_page.extract_tables()
     for tabela in tabelas:
+        # Lógica para extratos detalhados
         for linha in tabela:
             if len(linha) > 2 and linha[1] and isinstance(linha[1], str) and linha[1].strip() in ("APLICAÇÃO", "RESGATE"):
                 try:
                     transacoes.append({"data": linha[0], "historico": linha[1].strip(), "valor": limpar_valor(linha[2])})
                 except (IndexError, TypeError): continue
+        # Lógica para extratos de resumo
         if not transacoes:
             saldo_anterior, saldo_atual = None, None
             for linha in tabela:
@@ -96,15 +98,12 @@ if st.button("Realizar Conciliação", type="primary", use_container_width=True)
             df_movimentacao = pd.read_csv(movimentacao_csv, sep=';', decimal=',', encoding='latin1')
 
             if not df_extratos.empty and not df_movimentacao.empty:
-                
-                # --- PASSO DE DIAGNÓSTICO ---
                 st.subheader("Diagnóstico do Ficheiro CSV")
-                st.write("O ficheiro CSV foi carregado. Estas são as colunas encontradas:")
+                st.write("Colunas encontradas no seu CSV:")
                 st.code(f"{df_movimentacao.columns.tolist()}")
                 
                 try:
                     # --- BLOCO DE CONFIGURAÇÃO ---
-                    # AJUSTE AS 3 LINHAS ABAIXO COM OS NOMES EXATOS DO SEU CSV
                     NOME_DA_COLUNA_CONTA_NO_CSV = 'Conta'
                     NOME_COLUNA_DATA_CSV = 'Data'
                     NOME_COLUNA_VALOR_CSV = 'Valor'
@@ -131,7 +130,7 @@ if st.button("Realizar Conciliação", type="primary", use_container_width=True)
 
                 except KeyError as e:
                     st.error(f"ERRO DE CONFIGURAÇÃO: A coluna {e} não foi encontrada no ficheiro CSV.")
-                    st.warning("Por favor, edita o ficheiro `app.py`, ajuste as 3 variáveis de configuração no 'BLOCO DE CONFIGURAÇÃO' para que correspondam exatamente aos nomes de colunas listados acima e envia a alteração para o GitHub.")
+                    st.warning(f"Por favor, edita o ficheiro `app.py`, ajuste a variável que contém {e} no 'BLOCO DE CONFIGURAÇÃO' para que corresponda a um dos nomes de colunas listados acima e envia a alteração para o GitHub.")
 
             else:
                 st.error("Não foi possível extrair transações dos PDFs ou o CSV está vazio.")
@@ -140,4 +139,16 @@ if st.button("Realizar Conciliação", type="primary", use_container_width=True)
 
 # --- Mostrar Resultados ---
 if 'conciliados' in st.session_state:
-    # ... (código para mostrar resultados continua igual)
+    st.header("Resultados da Conciliação")
+    
+    st.subheader(f"✅ Transações Conciliadas ({len(st.session_state.conciliados)})")
+    if not st.session_state.conciliados.empty:
+        st.dataframe(st.session_state.conciliados.drop(columns=['_merge']))
+        
+    st.subheader(f"⚠️ Transações Apenas nos Extratos PDF ({len(st.session_state.apenas_no_extrato)})")
+    if not st.session_state.apenas_no_extrato.empty:
+        st.dataframe(st.session_state.apenas_no_extrato.drop(columns=['_merge']))
+        
+    st.subheader(f"⚠️ Transações Apenas na Planilha de Movimentação ({len(st.session_state.apenas_na_movimentacao)})")
+    if not st.session_state.apenas_na_movimentacao.empty:
+        st.dataframe(st.session_state.apenas_na_movimentacao.drop(columns=['_merge']))
