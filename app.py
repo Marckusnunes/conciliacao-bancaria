@@ -5,7 +5,7 @@ import re
 from io import BytesIO
 
 st.set_page_config(layout="wide")
-st.title(" ferramenta de Conciliação Bancária")
+st.title(" Conciliação Bancária")
 
 # --- FUNÇÕES AUXILIARES ---
 
@@ -169,3 +169,4 @@ if 'conciliados' in st.session_state:
     st.subheader(f"⚠️ Transações Apenas na Planilha de Movimentação ({len(st.session_state.apenas_na_movimentacao)})")
     if not st.session_state.apenas_na_movimentacao.empty:
         st.dataframe(st.session_state.apenas_na_movimentacao.drop(columns=['_merge']))
+
