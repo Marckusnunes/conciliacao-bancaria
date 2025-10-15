@@ -21,10 +21,14 @@ def criar_chave_conta(numero_conta):
 def limpar_valor(valor_texto):
     if isinstance(valor_texto, str):
         try:
-            valor_limpo = re.sub(r'[^\d,]', '', valor_texto).replace(',', '.')
+            # Converte o formato brasileiro (1.234,56) para float (1234.56)
+            valor_limpo = valor_texto.replace('.', '').replace(',', '.')
             return float(valor_limpo)
         except (ValueError, AttributeError):
             return 0.0
+    # Se já for um número (float ou int), apenas o retorna
+    elif isinstance(valor_texto, (int, float)):
+        return float(valor_texto)
     return 0.0
 
 def identificar_tipo_extrato(texto):
@@ -95,23 +99,25 @@ if st.button("Realizar Conciliação", type="primary", use_container_width=True)
     if extratos_pdf and movimentacao_csv:
         with st.spinner("A processar..."):
             df_extratos = processar_extratos_pdf(extratos_pdf)
-            df_movimentacao = pd.read_csv(movimentacao_csv, sep=';', decimal=',', encoding='latin1')
+            # A função limpar_valor foi melhorada para lidar com valores que já são numéricos
+            df_movimentacao = pd.read_csv(movimentacao_csv, sep=';')
+            df_movimentacao.columns = df_movimentacao.columns.str.strip()
+
 
             if not df_extratos.empty and not df_movimentacao.empty:
-                st.subheader("Diagnóstico do Ficheiro CSV")
-                st.write("Colunas encontradas no seu CSV:")
-                st.code(f"{df_movimentacao.columns.tolist()}")
-                
                 try:
-                    # --- BLOCO DE CONFIGURAÇÃO ---
-                    NOME_DA_COLUNA_CONTA_NO_CSV = 'Conta'
-                    NOME_COLUNA_DATA_CSV = 'Data'
-                    NOME_COLUNA_VALOR_CSV = 'Valor'
+                    # --- BLOCO DE CONFIGURAÇÃO (CORRIGIDO) ---
+                    NOME_DA_COLUNA_CONTA_NO_CSV = 'Domicílio bancário'
+                    NOME_COLUNA_DATA_CSV = 'Data Emissão'
+                    NOME_COLUNA_VALOR_CSV = 'Movimentação'
                     # ---------------------------------
 
                     df_extratos['chave_conta'] = df_extratos['conta'].apply(criar_chave_conta)
                     df_movimentacao['chave_conta'] = df_movimentacao[NOME_DA_COLUNA_CONTA_NO_CSV].apply(criar_chave_conta)
                     
+                    # Aplica a função de limpeza na coluna de valor do CSV
+                    df_movimentacao[NOME_COLUNA_VALOR_CSV] = df_movimentacao[NOME_COLUNA_VALOR_CSV].apply(limpar_valor)
+
                     df_extratos_std = df_extratos[['data', 'valor', 'chave_conta', 'historico']].copy()
                     df_extratos_std.rename(columns={'data': 'data_movimento'}, inplace=True)
                     
@@ -129,8 +135,9 @@ if st.button("Realizar Conciliação", type="primary", use_container_width=True)
                     st.success("Conciliação concluída!")
 
                 except KeyError as e:
-                    st.error(f"ERRO DE CONFIGURAÇÃO: A coluna {e} não foi encontrada no ficheiro CSV.")
-                    st.warning(f"Por favor, edita o ficheiro `app.py`, ajuste a variável que contém {e} no 'BLOCO DE CONFIGURAÇÃO' para que corresponda a um dos nomes de colunas listados acima e envia a alteração para o GitHub.")
+                    st.error(f"ERRO DE CONFIGURAÇÃO: A coluna {e} não foi encontrada. Verifique o Bloco de Configuração no código.")
+                except Exception as e:
+                    st.error(f"Ocorreu um erro inesperado durante a conciliação: {e}")
 
             else:
                 st.error("Não foi possível extrair transações dos PDFs ou o CSV está vazio.")
