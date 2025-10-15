@@ -4,9 +4,23 @@ import pdfplumber
 import re
 from io import BytesIO
 
-# --- Funções de Extração (as mesmas que desenvolvemos antes) ---
+st.set_page_config(layout="wide")
+st.title(" ferramenta de Conciliação Bancária")
+
+# --- FUNÇÕES AUXILIARES ---
+
+def criar_chave_conta(numero_conta):
+    """Cria uma chave primária a partir de um número de conta, usando os últimos 5 dígitos."""
+    try:
+        s = str(numero_conta)
+        numeros = re.sub(r'\D', '', s)
+        chave = numeros[-5:]
+        return chave.zfill(5)
+    except:
+        return None
 
 def limpar_valor(valor_texto):
+    """Converte valores monetários em texto para float."""
     if isinstance(valor_texto, str):
         try:
             valor_limpo = re.sub(r'[^\d,]', '', valor_texto).replace(',', '.')
@@ -15,141 +29,147 @@ def limpar_valor(valor_texto):
             return 0.0
     return 0.0
 
+# --- FUNÇÕES DE EXTRAÇÃO DE PDF ---
+
 def identificar_tipo_extrato(texto):
-    if "Investimentos Fundos" in texto:
-        return "INVESTIMENTOS"
-    if "Extrato de Conta Corrente" in texto:
-        return "CONTA_CORRENTE"
+    if "Investimentos Fundos" in texto: return "INVESTIMENTOS"
+    if "Extrato de Conta Corrente" in texto: return "CONTA_CORRENTE"
     return "DESCONHECIDO"
 
 def extrair_dados_cabecalho(texto):
     dados = {"agencia": None, "conta": None, "periodo": None}
     match_agencia = re.search(r"Agência\s*([\d-]+)", texto)
-    if match_agencia:
-        dados["agencia"] = match_agencia.group(1).strip()
+    if match_agencia: dados["agencia"] = match_agencia.group(1).strip()
     match_conta = re.search(r"(?:Conta corrente|Conta)\s*([\d\.-]+)", texto)
-    if match_conta:
-        dados["conta"] = match_conta.group(1).strip()
+    if match_conta: dados["conta"] = match_conta.group(1).strip()
     match_periodo = re.search(r"Mês/ano referência\s*([A-Z]+/\d{4})", texto)
-    if match_periodo:
-        dados["periodo"] = match_periodo.group(1).strip()
+    if match_periodo: dados["periodo"] = match_periodo.group(1).strip()
     return dados
 
 def extrair_dados_investimentos(texto):
     if "NÃO HOUVE MOVIMENTO NO PERÍODO SOLICITADO." in texto:
-        return {"situacao": "Sem Movimento", "saldo_anterior": 0.0, "aplicacoes": 0.0, "resgates": 0.0, "rendimento_liquido": 0.0, "saldo_atual": 0.0}
+        return [] # Retorna lista vazia se não houver movimento
+
+    transacoes = []
+    # Usar regex para encontrar as linhas de transação na tabela de extrato
+    # Este padrão busca por linhas que começam com uma data no formato DD/MM/AAAA
+    linhas = re.findall(r"(\d{2}/\d{2}/\d{4})\s+(APLICAÇÃO|RESGATE)\s+([\d\.,]+)", texto)
+    for data, historico, valor_str in linhas:
+        transacoes.append({
+            "data": data,
+            "historico": historico,
+            "valor": limpar_valor(valor_str)
+        })
+    return transacoes
+
+def processar_extratos_pdf(lista_ficheiros_pdf):
+    """
+    Nova função para extrair TRANSAÇÕES INDIVIDUAIS dos PDFs.
+    """
+    lista_transacoes_finais = []
+    for ficheiro_pdf in lista_ficheiros_pdf:
+        try:
+            with pdfplumber.open(ficheiro_pdf) as pdf:
+                texto_completo = "".join([pagina.extract_text(x_tolerance=2) or "" for pagina in pdf.pages])
+                tipo_extrato = identificar_tipo_extrato(texto_completo)
+                
+                if tipo_extrato == "INVESTIMENTOS":
+                    dados_cabecalho = extrair_dados_cabecalho(texto_completo)
+                    transacoes = extrair_dados_investimentos(texto_completo)
+                    
+                    for trans in transacoes:
+                        trans["agencia"] = dados_cabecalho.get("agencia")
+                        trans["conta"] = dados_cabecalho.get("conta")
+                        trans["ficheiro_origem"] = ficheiro_pdf.name
+                        lista_transacoes_finais.append(trans)
+        except Exception as e:
+            st.error(f"Erro ao processar o PDF {ficheiro_pdf.name}: {e}")
     
-    saldo_anterior = re.search(r"SALDO ANTERIOR\s*([\d\.,]+)", texto)
-    aplicacoes = re.search(r"APLICAÇÕES \(\+\)\s*([\d\.,]+)", texto)
-    resgates = re.search(r"RESGATES \(-\)\s*([\d\.,]+)", texto)
-    rendimento = re.search(r"RENDIMENTO LÍQUIDO\s*([\d\.,]+)", texto)
-    saldo_atual = re.search(r"SALDO ATUAL =\s*([\d\.,]+)", texto)
+    return pd.DataFrame(lista_transacoes_finais)
 
-    return {
-        "situacao": "Com Movimento",
-        "saldo_anterior": limpar_valor(saldo_anterior.group(1) if saldo_anterior else '0,00'),
-        "aplicacoes": limpar_valor(aplicacoes.group(1) if aplicacoes else '0,00'),
-        "resgates": limpar_valor(resgates.group(1) if resgates else '0,00'),
-        "rendimento_liquido": limpar_valor(rendimento.group(1) if rendimento else '0,00'),
-        "saldo_atual": limpar_valor(saldo_atual.group(1) if saldo_atual else '0,00')
-    }
+# --- INTERFACE DA APLICAÇÃO ---
 
-# --- Função de Processamento Adaptada para Streamlit ---
+st.info("Carregue os extratos (PDF) e a sua planilha de movimentação (CSV) para realizar a conciliação.")
 
-def processar_extrato_pdf(ficheiro_pdf):
-    try:
-        with pdfplumber.open(ficheiro_pdf) as pdf:
-            texto_completo = "".join([pagina.extract_text(x_tolerance=2) or "" for pagina in pdf.pages])
-            tipo_extrato = identificar_tipo_extrato(texto_completo)
-            
-            if tipo_extrato != "INVESTIMENTOS":
-                return None
-
-            dados_comuns = extrair_dados_cabecalho(texto_completo)
-            dados_comuns["ficheiro"] = ficheiro_pdf.name
-            dados_comuns["tipo_extrato"] = tipo_extrato
-            dados_especificos = extrair_dados_investimentos(texto_completo)
-            
-            return {**dados_comuns, **dados_especificos}
-    except Exception as e:
-        st.error(f"Erro ao processar o ficheiro {ficheiro_pdf.name}: {e}")
-        return None
-
-# --- Interface da Aplicação Streamlit ---
-
-st.set_page_config(layout="wide")
-st.title(" ferramenta de Pré-Conciliação Bancária")
-
-st.info("Carregue os extratos de investimentos (PDF) e a planilha de movimentação (CSV) para preparar os dados para a conciliação.")
-
+# Colunas para Upload
 col1, col2 = st.columns(2)
-
 with col1:
-    st.header("1. Carregar Extratos (PDF)")
-    extratos_pdf = st.file_uploader(
-        "Selecione os extratos de investimentos",
-        type="pdf",
-        accept_multiple_files=True
-    )
-
+    extratos_pdf = st.file_uploader("1. Carregar Extratos de Investimentos (PDF)", type="pdf", accept_multiple_files=True)
 with col2:
-    st.header("2. Carregar Movimentação (CSV)")
-    movimentacao_csv = st.file_uploader(
-        "Selecione a sua planilha de movimentação",
-        type="csv"
-    )
+    movimentacao_csv = st.file_uploader("2. Carregar Planilha de Movimentação Contábil (CSV)", type="csv")
 
-if st.button("Processar e Preparar Dados", type="primary"):
-    if not extratos_pdf:
-        st.warning("Por favor, carregue pelo menos um extrato PDF.")
+if st.button("Realizar Conciliação", type="primary", use_container_width=True):
+    if extratos_pdf and movimentacao_csv:
+        with st.spinner("A processar... Por favor, aguarde."):
+            # Passo 1: Extrair transações dos PDFs
+            df_extratos = processar_extratos_pdf(extratos_pdf)
+            
+            # Passo 2: Carregar a movimentação contábil
+            df_movimentacao = pd.read_csv(movimentacao_csv, sep=';', decimal=',', encoding='latin1')
+
+            if not df_extratos.empty and not df_movimentacao.empty:
+                # Passo 3: Criar as chaves primárias (como sugeriste)
+                # ATENÇÃO: Ajuste 'Nome da Coluna da Conta' para o nome correto no seu CSV
+                st.write("A criar chaves de conciliação...")
+                df_extratos['chave_conta'] = df_extratos['conta'].apply(criar_chave_conta)
+                
+                # ADAPTE A LINHA ABAIXO com o nome correto da coluna da conta no seu CSV
+                # Exemplo: se a coluna se chamar 'Conta Corrente', use df_movimentacao['Conta Corrente']
+                NOME_DA_COLUNA_CONTA_NO_CSV = 'Conta' # <--- AJUSTE AQUI SE NECESSÁRIO
+                df_movimentacao['chave_conta'] = df_movimentacao[NOME_DA_COLUNA_CONTA_NO_CSV].apply(criar_chave_conta)
+
+                # Passo 4: Padronizar colunas para o merge
+                # ADAPTE os nomes das colunas de data e valor do seu CSV
+                df_extratos_std = df_extratos[['data', 'valor', 'chave_conta', 'historico']].copy()
+                df_extratos_std.rename(columns={'data': 'data_movimento'}, inplace=True)
+                
+                # ADAPTE A LINHA ABAIXO com os nomes corretos das colunas no seu CSV
+                NOME_COLUNA_DATA_CSV = 'Data' # <--- AJUSTE AQUI
+                NOME_COLUNA_VALOR_CSV = 'Valor' # <--- AJUSTE AQUI
+                df_movimentacao_std = df_movimentacao[[NOME_COLUNA_DATA_CSV, NOME_COLUNA_VALOR_CSV, 'chave_conta']].copy()
+                df_movimentacao_std.rename(columns={NOME_COLUNA_DATA_CSV: 'data_movimento', NOME_COLUNA_VALOR_CSV: 'valor'}, inplace=True)
+                
+                # Arredondar valores para evitar problemas com casas decimais
+                df_extratos_std['valor'] = df_extratos_std['valor'].round(2)
+                df_movimentacao_std['valor'] = df_movimentacao_std['valor'].round(2)
+
+                # Passo 5: Realizar a conciliação (merge)
+                st.write("A cruzar os dados...")
+                df_merged = pd.merge(
+                    df_extratos_std,
+                    df_movimentacao_std,
+                    on=['chave_conta', 'data_movimento', 'valor'],
+                    how='outer',
+                    indicator=True
+                )
+
+                # Passo 6: Separar os resultados
+                conciliados = df_merged[df_merged['_merge'] == 'both']
+                apenas_no_extrato = df_merged[df_merged['_merge'] == 'left_only']
+                apenas_na_movimentacao = df_merged[df_merged['_merge'] == 'right_only']
+
+                # Guardar resultados no estado da sessão para mostrar
+                st.session_state['conciliados'] = conciliados
+                st.session_state['apenas_no_extrato'] = apenas_no_extrato
+                st.session_state['apenas_na_movimentacao'] = apenas_na_movimentacao
+                st.success("Conciliação concluída!")
+
+            else:
+                st.error("Não foi possível extrair transações dos PDFs ou o CSV está vazio.")
+
     else:
-        dados_extratos = []
-        with st.spinner("A extrair dados dos extratos..."):
-            for extrato in extratos_pdf:
-                dados = processar_extrato_pdf(extrato)
-                if dados:
-                    dados_extratos.append(dados)
-        
-        if not dados_extratos:
-            st.error("Nenhum extrato de investimento válido foi encontrado nos PDFs carregados.")
-        else:
-            df_extratos = pd.DataFrame(dados_extratos)
-            st.session_state['df_extratos'] = df_extratos
+        st.warning("É necessário carregar os ficheiros PDF e o ficheiro CSV para continuar.")
 
-    if not movimentacao_csv:
-        st.warning("Por favor, carregue o ficheiro CSV de movimentação.")
-    else:
-        with st.spinner("A carregar planilha de movimentação..."):
-            try:
-                # <<< ALTERAÇÃO AQUI: Adicionado encoding='latin1' >>>
-                df_movimentacao = pd.read_csv(movimentacao_csv, sep=';', decimal=',', encoding='latin1')
-                st.session_state['df_movimentacao'] = df_movimentacao
-            except Exception as e:
-                st.error(f"Erro ao ler o ficheiro CSV: {e}")
-                st.info("Tente abrir o CSV no seu computador, guardá-lo como 'CSV UTF-8' e carregá-lo novamente.")
 
-# --- Secção de Resultados ---
+# --- Mostrar Resultados ---
+if 'conciliados' in st.session_state:
+    st.header("Resultados da Conciliação")
 
-if 'df_extratos' in st.session_state and 'df_movimentacao' in st.session_state:
-    st.success("Dados processados e prontos para a conciliação!")
-    st.header("Dados Reservados para Conciliação")
+    st.subheader(f"✅ Transações Conciliadas ({len(st.session_state.conciliados)})")
+    st.dataframe(st.session_state.conciliados)
 
-    st.subheader("Resultado Extraído dos Extratos PDF")
-    st.dataframe(st.session_state.df_extratos)
-    st.download_button(
-        label="Descarregar CSV dos Extratos",
-        data=st.session_state.df_extratos.to_csv(sep=';', decimal=',', index=False).encode('utf-8'),
-        file_name='resultado_extratos.csv',
-        mime='text/csv',
-    )
+    st.subheader(f"⚠️ Transações Apenas nos Extratos PDF ({len(st.session_state.apenas_no_extrato)})")
+    st.dataframe(st.session_state.apenas_no_extrato)
 
-    st.divider()
-
-    st.subheader("Dados da Planilha de Movimentação")
-    st.dataframe(st.session_state.df_movimentacao)
-    st.download_button(
-        label="Descarregar CSV da Movimentação",
-        data=st.session_state.df_movimentacao.to_csv(sep=';', decimal=',', index=False).encode('utf-8'),
-        file_name='movimentacao_original.csv',
-        mime='text/csv',
-    )
+    st.subheader(f"⚠️ Transações Apenas na Planilha de Movimentação ({len(st.session_state.apenas_na_movimentacao)})")
+    st.dataframe(st.session_state.apenas_na_movimentacao)
