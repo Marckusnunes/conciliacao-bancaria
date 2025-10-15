@@ -7,7 +7,7 @@ from io import BytesIO
 st.set_page_config(layout="wide")
 st.title(" ferramenta de Conciliação Bancária")
 
-# --- FUNÇÕES AUXILIARES E DE EXTRAÇÃO (sem alterações) ---
+# --- FUNÇÕES AUXILIARES E DE EXTRAÇÃO ---
 
 def criar_chave_conta(numero_conta):
     try:
@@ -62,7 +62,7 @@ def extrair_dados_investimentos(pdf_page):
                     elif linha[1].strip() == "SALDO ATUAL": saldo_atual = {"data": linha[0], "valor": limpar_valor(linha[2])}
             if saldo_anterior and saldo_atual:
                 rendimento = round(saldo_atual["valor"] - saldo_anterior["valor"], 2)
-                if rendimento != 0: # Apenas regista se houver rendimento ou perda
+                if rendimento != 0:
                     transacoes.append({"data": saldo_atual["data"], "historico": "RENDIMENTO", "valor": rendimento})
     return transacoes
 
@@ -106,35 +106,31 @@ if st.button("Realizar Conciliação", type="primary", use_container_width=True)
                     NOME_DA_COLUNA_CONTA_NO_CSV = 'Domicílio bancário'
                     NOME_COLUNA_DATA_CSV = 'Data Emissão'
                     NOME_COLUNA_VALOR_CSV = 'Movimentação'
-                    NOME_COLUNA_DOCUMENTO_CSV = 'Documento' # <--- NOVA CONFIGURAÇÃO
+                    NOME_COLUNA_DOCUMENTO_CSV = 'Documento'
                     # ---------------------------------
 
                     # --- Preparação e Padronização ---
                     df_extratos['chave_conta'] = df_extratos['conta'].apply(criar_chave_conta)
                     df_movimentacao['chave_conta'] = df_movimentacao[NOME_DA_COLUNA_CONTA_NO_CSV].apply(criar_chave_conta)
-                    
                     df_movimentacao[NOME_COLUNA_VALOR_CSV] = df_movimentacao[NOME_COLUNA_VALOR_CSV].apply(limpar_valor)
-                    
-                    # <<< MELHORIA 1: Padronizar Datas >>>
                     df_extratos['data_movimento'] = pd.to_datetime(df_extratos['data'], dayfirst=True)
                     df_movimentacao['data_movimento'] = pd.to_datetime(df_movimentacao[NOME_COLUNA_DATA_CSV], dayfirst=True)
-                    
-                    # <<< MELHORIA 2: Usar Valor Absoluto para Comparação >>>
                     df_extratos['valor_abs'] = df_extratos['valor'].abs()
                     df_movimentacao['valor_abs'] = df_movimentacao[NOME_COLUNA_VALOR_CSV].abs()
 
-                    # <<< MELHORIA 3: Incluir a Coluna 'Documento' >>>
+                    # <<< MELHORIA: Renomear colunas ANTES do merge para mais clareza >>>
                     df_extratos_std = df_extratos[['data_movimento', 'valor_abs', 'chave_conta', 'historico', 'valor']].copy()
-                    df_movimentacao_std = df_movimentacao[['data_movimento', 'valor_abs', 'chave_conta', NOME_COLUNA_DOCUMENTO_CSV, NOME_COLUNA_VALOR_CSV]].copy()
-                    df_movimentacao_std.rename(columns={NOME_COLUNA_VALOR_CSV: 'valor'}, inplace=True)
+                    df_extratos_std.rename(columns={'valor': 'valor_extrato'}, inplace=True)
                     
+                    df_movimentacao_std = df_movimentacao[['data_movimento', 'valor_abs', 'chave_conta', NOME_COLUNA_DOCUMENTO_CSV, NOME_COLUNA_VALOR_CSV]].copy()
+                    df_movimentacao_std.rename(columns={NOME_COLUNA_VALOR_CSV: 'valor_mov', NOME_COLUNA_DOCUMENTO_CSV: 'Documento'}, inplace=True)
+
                     # Realizar o merge usando as novas colunas padronizadas
                     df_merged = pd.merge(
                         df_extratos_std,
                         df_movimentacao_std,
                         on=['chave_conta', 'data_movimento', 'valor_abs'],
                         how='outer',
-                        suffixes=('_extrato', '_mov'),
                         indicator=True
                     )
                     
@@ -159,14 +155,15 @@ if 'conciliados' in st.session_state:
     
     st.subheader(f"✅ Transações Conciliadas ({len(st.session_state.conciliados)})")
     if not st.session_state.conciliados.empty:
-        # Mostra as colunas importantes, incluindo o Documento
-        colunas_para_mostrar = ['data_movimento', 'valor_extrato', 'historico', NOME_COLUNA_DOCUMENTO_CSV, 'chave_conta']
-        st.dataframe(st.session_state.conciliados[colunas_para_mostrar].rename(columns={'valor_extrato': 'Valor', 'data_movimento': 'Data', 'historico': 'Histórico Extrato', NOME_COLUNA_DOCUMENTO_CSV: 'Documento Contábil'}))
+        colunas_conciliado = ['data_movimento', 'valor_extrato', 'historico', 'Documento', 'chave_conta']
+        st.dataframe(st.session_state.conciliados[colunas_conciliado].rename(columns={'valor_extrato': 'Valor', 'data_movimento': 'Data', 'historico': 'Histórico Extrato', 'Documento': 'Documento Contábil'}))
         
     st.subheader(f"⚠️ Transações Apenas nos Extratos PDF ({len(st.session_state.apenas_no_extrato)})")
     if not st.session_state.apenas_no_extrato.empty:
-        st.dataframe(st.session_state.apenas_no_extrato[['data_movimento', 'valor_extrato', 'historico', 'chave_conta']].rename(columns={'valor_extrato': 'Valor', 'data_movimento': 'Data'}))
+        colunas_extrato = ['data_movimento', 'valor_extrato', 'historico', 'chave_conta']
+        st.dataframe(st.session_state.apenas_no_extrato[colunas_extrato].rename(columns={'valor_extrato': 'Valor', 'data_movimento': 'Data'}))
         
     st.subheader(f"⚠️ Transações Apenas na Planilha de Movimentação ({len(st.session_state.apenas_na_movimentacao)})")
     if not st.session_state.apenas_na_movimentacao.empty:
-        st.dataframe(st.session_state.apenas_na_movimentacao[['data_movimento', 'valor_mov', NOME_COLUNA_DOCUMENTO_CSV, 'chave_conta']].rename(columns={'valor_mov': 'Valor', 'data_movimento': 'Data', NOME_COLUNA_DOCUMENTO_CSV: 'Documento'}))
+        colunas_mov = ['data_movimento', 'valor_mov', 'Documento', 'chave_conta']
+        st.dataframe(st.session_state.apenas_na_movimentacao[colunas_mov].rename(columns={'valor_mov': 'Valor', 'data_movimento': 'Data'}))
