@@ -5,7 +5,7 @@ import re
 from io import BytesIO
 
 st.set_page_config(layout="wide")
-st.title(" ferramenta de Conciliação Bancária (Modo de Diagnóstico)")
+st.title(" ferramenta de Conciliação Bancária")
 
 # --- FUNÇÕES AUXILIARES ---
 
@@ -27,11 +27,10 @@ def limpar_valor(valor_texto):
             return 0.0
     return 0.0
 
-# --- FUNÇÕES DE EXTRAÇÃO DE PDF (COM DIAGNÓSTICOS) ---
+# --- FUNÇÕES DE EXTRAÇÃO DE PDF (VERSÃO FINAL E INTELIGENTE) ---
 
 def identificar_tipo_extrato(texto):
     if "Investimentos Fundos" in texto: return "INVESTIMENTOS"
-    if "Extrato de Conta Corrente" in texto: return "CONTA_CORRENTE"
     return "DESCONHECIDO"
 
 def extrair_dados_cabecalho(texto):
@@ -45,71 +44,77 @@ def extrair_dados_cabecalho(texto):
     return dados
 
 def extrair_dados_investimentos(pdf_page):
-    """(VERSÃO DE DIAGNÓSTICO) Extrai transações e imprime o que encontra."""
+    """
+    (VERSÃO FINAL)
+    Extrai transações de extratos detalhados E de extratos de resumo.
+    """
     transacoes = []
-    
-    # --- INÍCIO DO CÓDIGO DE DIAGNÓSTICO ---
-    st.write(f"--- Diagnóstico da Página {pdf_page.page_number} ---")
     tabelas = pdf_page.extract_tables()
-    st.write(f"📄 Encontradas {len(tabelas)} tabelas nesta página.")
-    # --- FIM DO CÓDIGO DE DIAGNÓSTICO ---
-    
-    for i, tabela in enumerate(tabelas):
-        # --- INÍCIO DO CÓDIGO DE DIAGNÓSTICO ---
-        st.write(f"Tabela {i+1}: Amostra das primeiras 3 linhas:")
-        for j, linha_raw in enumerate(tabela[:3]):
-            st.text(f"  Linha {j}: {linha_raw}")
-        # --- FIM DO CÓDIGO DE DIAGNÓSTICO ---
 
+    for tabela in tabelas:
+        # Lógica para extratos detalhados
         for linha in tabela:
             if len(linha) > 2 and linha[1] and isinstance(linha[1], str) and linha[1].strip() in ("APLICAÇÃO", "RESGATE"):
                 try:
-                    data = linha[0]
-                    historico = linha[1].strip()
-                    valor_str = linha[2]
-                    
                     transacoes.append({
-                        "data": data,
-                        "historico": historico,
-                        "valor": limpar_valor(valor_str)
+                        "data": linha[0],
+                        "historico": linha[1].strip(),
+                        "valor": limpar_valor(linha[2])
                     })
-                except (IndexError, TypeError):
-                    continue
+                except (IndexError, TypeError): continue
+        
+        # Lógica para extratos de resumo (se nenhuma transação detalhada foi encontrada)
+        if not transacoes:
+            saldo_anterior = None
+            saldo_atual = None
+            for linha in tabela:
+                if len(linha) > 2 and isinstance(linha[1], str):
+                    if linha[1].strip() == "SALDO ANTERIOR":
+                        saldo_anterior = {"data": linha[0], "valor": limpar_valor(linha[2])}
+                    elif linha[1].strip() == "SALDO ATUAL":
+                        saldo_atual = {"data": linha[0], "valor": limpar_valor(linha[2])}
+            
+            if saldo_anterior and saldo_atual:
+                rendimento = round(saldo_atual["valor"] - saldo_anterior["valor"], 2)
+                if rendimento > 0:
+                    transacoes.append({
+                        "data": saldo_atual["data"],
+                        "historico": "RENDIMENTO",
+                        "valor": rendimento
+                    })
+
     return transacoes
 
 def processar_extratos_pdf(lista_ficheiros_pdf):
     lista_transacoes_finais = []
     for ficheiro_pdf in lista_ficheiros_pdf:
-        st.info(f"🔍 Analisando o ficheiro: {ficheiro_pdf.name}")
         try:
             with pdfplumber.open(ficheiro_pdf) as pdf:
                 for page in pdf.pages:
                     texto_completo = page.extract_text(x_tolerance=2) or ""
-                    tipo_extrato = identificar_tipo_extrato(texto_completo)
-                    
-                    if tipo_extrato == "INVESTIMENTOS":
+                    if identificar_tipo_extrato(texto_completo) == "INVESTIMENTOS":
                         dados_cabecalho = extrair_dados_cabecalho(texto_completo)
                         transacoes = extrair_dados_investimentos(page)
-                        
                         for trans in transacoes:
-                            trans["agencia"] = dados_cabecalho.get("agencia")
-                            trans["conta"] = dados_cabecalho.get("conta")
-                            trans["ficheiro_origem"] = ficheiro_pdf.name
+                            trans.update({
+                                "agencia": dados_cabecalho.get("agencia"),
+                                "conta": dados_cabecalho.get("conta"),
+                                "ficheiro_origem": ficheiro_pdf.name
+                            })
                             lista_transacoes_finais.append(trans)
         except Exception as e:
             st.error(f"Erro ao processar o PDF {ficheiro_pdf.name}: {e}")
-    
     return pd.DataFrame(lista_transacoes_finais)
 
 # --- INTERFACE DA APLICAÇÃO ---
 
-st.info("Carregue os extratos (PDF) e a sua planilha de movimentação (CSV) para realizar a conciliação.")
+st.info("Carregue os extratos de investimentos (PDF) e a sua planilha de movimentação (CSV) para realizar a conciliação.")
 
 col1, col2 = st.columns(2)
 with col1:
-    extratos_pdf = st.file_uploader("1. Carregar Extratos de Investimentos (PDF)", type="pdf", accept_multiple_files=True)
+    extratos_pdf = st.file_uploader("1. Carregar Extratos (PDF)", type="pdf", accept_multiple_files=True)
 with col2:
-    movimentacao_csv = st.file_uploader("2. Carregar Planilha de Movimentação Contábil (CSV)", type="csv")
+    movimentacao_csv = st.file_uploader("2. Carregar Movimentação Contábil (CSV)", type="csv")
 
 if st.button("Realizar Conciliação", type="primary", use_container_width=True):
     if extratos_pdf and movimentacao_csv:
@@ -117,46 +122,45 @@ if st.button("Realizar Conciliação", type="primary", use_container_width=True)
             df_extratos = processar_extratos_pdf(extratos_pdf)
             df_movimentacao = pd.read_csv(movimentacao_csv, sep=';', decimal=',', encoding='latin1')
 
-            # --- INÍCIO DO CÓDIGO DE DIAGNÓSTICO ---
-            st.header("Relatório de Diagnóstico")
-            if df_extratos.empty:
-                st.error("RESULTADO DO DIAGNÓSTICO: Nenhuma transação foi extraída dos ficheiros PDF.")
-            else:
-                st.success(f"RESULTADO DO DIAGNÓSTICO: {len(df_extratos)} transações extraídas dos PDFs com sucesso.")
-
-            if df_movimentacao.empty:
-                st.error("RESULTADO DO DIAGNÓSTICO: O ficheiro CSV foi lido mas resultou numa tabela vazia.")
-            else:
-                st.success(f"RESULTADO DO DIAGNÓSTICO: {len(df_movimentacao)} linhas lidas do CSV com sucesso.")
-            # --- FIM DO CÓDIGO DE DIAGNÓSTICO ---
-
             if not df_extratos.empty and not df_movimentacao.empty:
-                # O resto da lógica de conciliação continua aqui...
-                st.write("A criar chaves de conciliação...")
+                # Preparar para conciliação
                 df_extratos['chave_conta'] = df_extratos['conta'].apply(criar_chave_conta)
-                NOME_DA_COLUNA_CONTA_NO_CSV = 'Conta' 
+                NOME_DA_COLUNA_CONTA_NO_CSV = 'Conta' # <--- AJUSTE AQUI SE NECESSÁRIO
                 df_movimentacao['chave_conta'] = df_movimentacao[NOME_DA_COLUNA_CONTA_NO_CSV].apply(criar_chave_conta)
-                st.write("A padronizar colunas...")
+                
                 df_extratos_std = df_extratos[['data', 'valor', 'chave_conta', 'historico']].copy()
                 df_extratos_std.rename(columns={'data': 'data_movimento'}, inplace=True)
-                NOME_COLUNA_DATA_CSV = 'Data'
-                NOME_COLUNA_VALOR_CSV = 'Valor'
+                
+                NOME_COLUNA_DATA_CSV = 'Data' # <--- AJUSTE AQUI
+                NOME_COLUNA_VALOR_CSV = 'Valor' # <--- AJUSTE AQUI
                 df_movimentacao_std = df_movimentacao[[NOME_COLUNA_DATA_CSV, NOME_COLUNA_VALOR_CSV, 'chave_conta']].copy()
                 df_movimentacao_std.rename(columns={NOME_COLUNA_DATA_CSV: 'data_movimento', NOME_COLUNA_VALOR_CSV: 'valor'}, inplace=True)
+                
                 df_extratos_std['valor'] = df_extratos_std['valor'].round(2)
                 df_movimentacao_std['valor'] = df_movimentacao_std['valor'].round(2)
-                st.write("A cruzar os dados...")
+
+                # Realizar merge
                 df_merged = pd.merge(df_extratos_std, df_movimentacao_std, on=['chave_conta', 'data_movimento', 'valor'], how='outer', indicator=True)
+                
+                # Separar resultados
                 st.session_state['conciliados'] = df_merged[df_merged['_merge'] == 'both']
                 st.session_state['apenas_no_extrato'] = df_merged[df_merged['_merge'] == 'left_only']
                 st.session_state['apenas_na_movimentacao'] = df_merged[df_merged['_merge'] == 'right_only']
                 st.success("Conciliação concluída!")
             else:
-                 st.error("A conciliação não pode prosseguir porque um dos ficheiros não retornou dados.")
+                st.error("Não foi possível extrair transações dos PDFs ou o CSV está vazio. Verifique os ficheiros.")
     else:
         st.warning("É necessário carregar os ficheiros PDF e o ficheiro CSV para continuar.")
 
 # --- Mostrar Resultados ---
 if 'conciliados' in st.session_state:
     st.header("Resultados da Conciliação")
-    # ... (o resto do código para mostrar os resultados continua igual)
+    st.subheader(f"✅ Transações Conciliadas ({len(st.session_state.conciliados)})")
+    if not st.session_state.conciliados.empty:
+        st.dataframe(st.session_state.conciliados.drop(columns=['_merge']))
+    st.subheader(f"⚠️ Transações Apenas nos Extratos PDF ({len(st.session_state.apenas_no_extrato)})")
+    if not st.session_state.apenas_no_extrato.empty:
+        st.dataframe(st.session_state.apenas_no_extrato.drop(columns=['_merge']))
+    st.subheader(f"⚠️ Transações Apenas na Planilha de Movimentação ({len(st.session_state.apenas_na_movimentacao)})")
+    if not st.session_state.apenas_na_movimentacao.empty:
+        st.dataframe(st.session_state.apenas_na_movimentacao.drop(columns=['_merge']))
